@@ -18,7 +18,7 @@ extern "C" void VMXSetVMXE(void);
 extern "C" VOID VMXRestoreState();
 extern "C" void asm_sli();
 extern "C" void asm_cli();
-extern "C" void VMXLaunch(PVOID);
+extern "C" void VMXLaunch(PVOID, bool);
 extern "C" USHORT asm_get_CS(VOID);
 extern "C" USHORT asm_get_DS(VOID);
 extern "C" USHORT asm_get_ES(VOID);
@@ -298,7 +298,7 @@ ULONG AdjustControls(IN ULONG ctl, IN ULONG msr)
     return ctl;
 }
 
-BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata)
+BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool resume)
 {
     // setting host segments
 #define VMWRITE_HOSTSEGMENTSELECTOR(segment) __vmx_vmwrite(HOST_## segment ## _SELECTOR, asm_get_ ## segment() & 0xF8)
@@ -311,18 +311,8 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata)
     VMWRITE_HOSTSEGMENTSELECTOR(GS);
     VMWRITE_HOSTSEGMENTSELECTOR(TR);
 
-    __vmx_vmwrite(VMCS_LINK_POINTER, ~0ULL); // unused
-
     __vmx_vmwrite(GUEST_IA32_DEBUGCTL, __readmsr(MSR_IA32_DEBUGCTL) & 0xFFFFFFFF);
     __vmx_vmwrite(GUEST_IA32_DEBUGCTL_HIGH, __readmsr(MSR_IA32_DEBUGCTL) >> 32);
-
-    __vmx_vmwrite(TSC_OFFSET, 0);
-    __vmx_vmwrite(TSC_OFFSET_HIGH, 0);
-
-    __vmx_vmwrite(PAGE_FAULT_ERROR_CODE_MASK, 0);
-    __vmx_vmwrite(PAGE_FAULT_ERROR_CODE_MATCH, 0);
-
-    __vmx_vmwrite(VM_ENTRY_INTR_INFO_FIELD, 0);
 
     auto gdt_base = asm_get_gdt_base();
     // setting guest segments
@@ -360,27 +350,6 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata)
 
     __vmx_vmwrite(VM_EXIT_MSR_LOAD_COUNT, msr_control_count);
     __vmx_vmwrite(VM_ENTRY_MSR_LOAD_COUNT, msr_control_count);
-    __vmx_vmwrite(VM_EXIT_MSR_STORE_COUNT, 0);
-
-    __vmx_vmwrite(CPU_BASED_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_ACTIVATE_MSR_BITMAP | CPU_BASED_HLT_EXITING | CPU_BASED_ACTIVATE_SECONDARY_CONTROLS, MSR_IA32_VMX_PROCBASED_CTLS));
-    __vmx_vmwrite(SECONDARY_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_CTL2_RDTSCP | CPU_BASED_CTL2_ENABLE_INVPCID | CPU_BASED_CTL2_ENABLE_XSAVE_XRSTORS, MSR_IA32_VMX_PROCBASED_CTLS2));
-
-    __vmx_vmwrite(PIN_BASED_VM_EXEC_CONTROL, AdjustControls(PIN_BASED_VM_EXECUTION_CONTROLS_EXTERNAL_INTERRUPT | PIN_BASED_VM_EXECUTION_CONTROLS_NMI_EXITING, MSR_IA32_VMX_PINBASED_CTLS));
-    __vmx_vmwrite(VM_EXIT_CONTROLS, AdjustControls(VM_EXIT_IA32E_MODE | VM_EXIT_LOAD_HOST_EFER, MSR_IA32_VMX_EXIT_CTLS));
-    __vmx_vmwrite(VM_ENTRY_CONTROLS, AdjustControls(VM_ENTRY_IA32E_MODE | VM_ENTRY_LOAD_GUEST_EFER, MSR_IA32_VMX_ENTRY_CTLS));
-
-    // unused
-    __vmx_vmwrite(CR3_TARGET_COUNT, 0);
-    __vmx_vmwrite(CR3_TARGET_VALUE0, 0);
-    __vmx_vmwrite(CR3_TARGET_VALUE1, 0);
-    __vmx_vmwrite(CR3_TARGET_VALUE2, 0);
-    __vmx_vmwrite(CR3_TARGET_VALUE3, 0);
-
-    __vmx_vmwrite(CR0_GUEST_HOST_MASK, 0);
-    __vmx_vmwrite(CR4_GUEST_HOST_MASK, 0);
-    __vmx_vmwrite(CR0_READ_SHADOW, 0);
-    __vmx_vmwrite(CR4_READ_SHADOW, 0);
-
 
     __vmx_vmwrite(GUEST_CR0, __readcr0());
     __vmx_vmwrite(GUEST_CR3, __readcr3());
@@ -421,10 +390,6 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata)
 
     __vmx_vmwrite(MSR_BITMAP, vmState->MSRBitMapPhysical);
 
-    // Host application handles all exceptions.(this is simple way)
-    size_t bitmap = ~(size_t)0;
-    __vmx_vmwrite(EXCEPTION_BITMAP, bitmap);
-
     __vmx_vmwrite(GUEST_IA32_EFER, (__readmsr(MSR_EFER) & ~1)); // clear SCE
     __vmx_vmwrite(HOST_IA32_EFER, __readmsr(MSR_EFER));
 
@@ -435,10 +400,43 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata)
 
     // host stack is written when vmlaunch is executed
 
+    if (!resume) {
+        __vmx_vmwrite(VMCS_LINK_POINTER, ~0ULL); // unused
+        __vmx_vmwrite(TSC_OFFSET, 0);
+        __vmx_vmwrite(TSC_OFFSET_HIGH, 0);
+
+        __vmx_vmwrite(PAGE_FAULT_ERROR_CODE_MASK, 0);
+        __vmx_vmwrite(PAGE_FAULT_ERROR_CODE_MATCH, 0);
+
+        __vmx_vmwrite(VM_ENTRY_INTR_INFO_FIELD, 0);
+
+        __vmx_vmwrite(VM_EXIT_MSR_STORE_COUNT, 0);
+
+        __vmx_vmwrite(CPU_BASED_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_ACTIVATE_MSR_BITMAP | CPU_BASED_HLT_EXITING | CPU_BASED_ACTIVATE_SECONDARY_CONTROLS, MSR_IA32_VMX_PROCBASED_CTLS));
+        __vmx_vmwrite(SECONDARY_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_CTL2_RDTSCP | CPU_BASED_CTL2_ENABLE_INVPCID | CPU_BASED_CTL2_ENABLE_XSAVE_XRSTORS, MSR_IA32_VMX_PROCBASED_CTLS2));
+
+        __vmx_vmwrite(PIN_BASED_VM_EXEC_CONTROL, AdjustControls(PIN_BASED_VM_EXECUTION_CONTROLS_EXTERNAL_INTERRUPT | PIN_BASED_VM_EXECUTION_CONTROLS_NMI_EXITING, MSR_IA32_VMX_PINBASED_CTLS));
+        __vmx_vmwrite(VM_EXIT_CONTROLS, AdjustControls(VM_EXIT_IA32E_MODE | VM_EXIT_LOAD_HOST_EFER, MSR_IA32_VMX_EXIT_CTLS));
+        __vmx_vmwrite(VM_ENTRY_CONTROLS, AdjustControls(VM_ENTRY_IA32E_MODE | VM_ENTRY_LOAD_GUEST_EFER, MSR_IA32_VMX_ENTRY_CTLS));
+
+        __vmx_vmwrite(CR3_TARGET_COUNT, 0);
+        __vmx_vmwrite(CR3_TARGET_VALUE0, 0);
+        __vmx_vmwrite(CR3_TARGET_VALUE1, 0);
+        __vmx_vmwrite(CR3_TARGET_VALUE2, 0);
+        __vmx_vmwrite(CR3_TARGET_VALUE3, 0);
+
+        __vmx_vmwrite(CR0_GUEST_HOST_MASK, 0);
+        __vmx_vmwrite(CR4_GUEST_HOST_MASK, 0);
+        __vmx_vmwrite(CR0_READ_SHADOW, 0);
+        __vmx_vmwrite(CR4_READ_SHADOW, 0);
+
+        // Host application handles all exceptions.(this is simple way)
+        __vmx_vmwrite(EXCEPTION_BITMAP, ~static_cast<UINT64>(0));
+    }
     return TRUE;
 }
 
-BOOLEAN SetupVMCS(PVirtualMachineState vtx_mem, vtmif *vmdata)
+BOOLEAN InitVMCS(PVirtualMachineState vtx_mem)
 {
     asm_cli();
     if (!ClearVMCS(vtx_mem))
@@ -447,12 +445,10 @@ BOOLEAN SetupVMCS(PVirtualMachineState vtx_mem, vtmif *vmdata)
     if (!LoadVMCS(vtx_mem))
         return FALSE;
 
-    WriteVMCSFields(vtx_mem, vmdata);
-
     return TRUE;
 }
 
-void Handler(vtmif *vmdata)
+bool Handler(vtmif *vmdata)
 {
     UINT64 exit_reason = 0;
     UINT64 guest_rip = 0, guest_rsp = 0;
@@ -461,6 +457,7 @@ void Handler(vtmif *vmdata)
     __vmx_vmread(GUEST_RSP, &guest_rsp);
     DebugVTMON("ExitReason: %llx %llx %llx\n", exit_reason, guest_rip, guest_rsp);
 
+    bool is_continue = false;
     UINT64 inst_len = 0;
     switch (exit_reason) {
         case 0:
@@ -499,17 +496,20 @@ void Handler(vtmif *vmdata)
             vmdata->context.Rcx = cpu_info[2];
             vmdata->context.Rdx = cpu_info[3];
             __vmx_vmread(VM_EXIT_INSTRUCTION_LEN, &inst_len);
+            is_continue = true;
             break;
         }
+
         // currently other exception handling is not supported :<
         default:
             break;
     }
-    
-    
+
     vmdata->exitcode = static_cast<ULONG>(exit_reason);
     vmdata->context.Rip = guest_rip + inst_len;
     vmdata->context.Rsp = guest_rsp;
+
+    return is_continue;
 }
 
 void StartVirtualization(vtmif *vmdata)
@@ -533,28 +533,32 @@ void StartVirtualization(vtmif *vmdata)
     VMXSetVMXE();
 
     if (ExecVMXON(vtx_mem)) {
-        if (SetupVMCS(vtx_mem, vmdata)) {
-            VMXLaunch(&(vmdata->context.Rax));
-            // store guest state
-            UINT64 guest_rflags = 0;
-            __vmx_vmread(GUEST_RFLAGS, &guest_rflags);
-            vmdata->context.EFlags = static_cast<ULONG>(guest_rflags);
+        if (InitVMCS(vtx_mem)) {
+            bool resume = false;
+            do {
+                WriteVMCSFields(vtx_mem, vmdata, resume);
+                VMXLaunch(&(vmdata->context.Rax), resume);
+                resume = true;
+                // store guest state
+                UINT64 guest_rflags = 0;
+                __vmx_vmread(GUEST_RFLAGS, &guest_rflags);
+                vmdata->context.EFlags = static_cast<ULONG>(guest_rflags);
 
-            UINT64 guest_selector = 0;
-            __vmx_vmread(GUEST_ES_SELECTOR, &guest_selector);
-            vmdata->context.SegEs = static_cast<USHORT>(guest_selector);
-            __vmx_vmread(GUEST_CS_SELECTOR, &guest_selector);
-            vmdata->context.SegCs = static_cast<USHORT>(guest_selector);
-            __vmx_vmread(GUEST_SS_SELECTOR, &guest_selector);
-            vmdata->context.SegSs = static_cast<USHORT>(guest_selector);
-            __vmx_vmread(GUEST_DS_SELECTOR, &guest_selector);
-            vmdata->context.SegDs = static_cast<USHORT>(guest_selector);
-            __vmx_vmread(GUEST_FS_SELECTOR, &guest_selector);
-            vmdata->context.SegFs = static_cast<USHORT>(guest_selector);
-            __vmx_vmread(GUEST_GS_SELECTOR, &guest_selector);
-            vmdata->context.SegGs = static_cast<USHORT>(guest_selector);
+                UINT64 guest_selector = 0;
+                __vmx_vmread(GUEST_ES_SELECTOR, &guest_selector);
+                vmdata->context.SegEs = static_cast<USHORT>(guest_selector);
+                __vmx_vmread(GUEST_CS_SELECTOR, &guest_selector);
+                vmdata->context.SegCs = static_cast<USHORT>(guest_selector);
+                __vmx_vmread(GUEST_SS_SELECTOR, &guest_selector);
+                vmdata->context.SegSs = static_cast<USHORT>(guest_selector);
+                __vmx_vmread(GUEST_DS_SELECTOR, &guest_selector);
+                vmdata->context.SegDs = static_cast<USHORT>(guest_selector);
+                __vmx_vmread(GUEST_FS_SELECTOR, &guest_selector);
+                vmdata->context.SegFs = static_cast<USHORT>(guest_selector);
+                __vmx_vmread(GUEST_GS_SELECTOR, &guest_selector);
+                vmdata->context.SegGs = static_cast<USHORT>(guest_selector);
+            } while(Handler(vmdata));
 
-            Handler(vmdata);
             __vmx_vmclear(&vtx_mem->VMCS_REGION);
         }
 
