@@ -63,24 +63,28 @@ VMXLaunch PROC
     push r15
 
     push rcx ; context
-    mov rax, rcx
-    mov rcx, (context PTR [rax])._rcx
-    mov rdx, (context PTR [rax])._rdx
-    mov rbx, (context PTR [rax])._rbx
-    mov rbp, (context PTR [rax])._rbp
-    mov rsi, (context PTR [rax])._rsi
-    mov rdi, (context PTR [rax])._rdi
-    mov r8,  (context PTR [rax])._r8
-    mov r9,  (context PTR [rax])._r9
-    mov r10, (context PTR [rax])._r10
-    mov r11, (context PTR [rax])._r11
-    mov r12, (context PTR [rax])._r12
-    mov r13, (context PTR [rax])._r13
-    mov r14, (context PTR [rax])._r14
-    mov r15, (context PTR [rax])._r15
-    mov rax, (context PTR [rax])._rax
-    vmlaunch
+    mov rax, (context PTR [rcx])._rax
+    mov rdx, (context PTR [rcx])._rdx
+    mov rbx, (context PTR [rcx])._rbx
+    mov rbp, (context PTR [rcx])._rbp
+    mov rsi, (context PTR [rcx])._rsi
+    mov rdi, (context PTR [rcx])._rdi
+    mov r8,  (context PTR [rcx])._r8
+    mov r9,  (context PTR [rcx])._r9
+    mov r10, (context PTR [rcx])._r10
+    mov r11, (context PTR [rcx])._r11
+    mov r12, (context PTR [rcx])._r12
+    mov r13, (context PTR [rcx])._r13
+    mov r14, (context PTR [rcx])._r14
+    mov r15, (context PTR [rcx])._r15
+    mov rcx, (context PTR [rcx])._rcx
 
+    cmp BYTE PTR [rsp + 68h], 0 ; rdx(host)
+    jne RESUME
+    vmlaunch
+    jmp VMXRestoreState
+RESUME:
+    vmresume
     jmp VMXRestoreState
 VMXLaunch ENDP
 
