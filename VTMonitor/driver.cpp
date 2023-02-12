@@ -1,6 +1,7 @@
 #include "common.h"
 #include <wdm.h>
 #include "vmm.h"
+#include "mem.h"
 
 NTSTATUS DefaultDispatcher(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
@@ -51,6 +52,7 @@ void DriverUnload(_In_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
 
+    ReleaseMemories();
     IoDeleteSymbolicLink(&lnkname);
     IoDeleteDevice(DriverObject->DeviceObject);
 }
@@ -75,6 +77,12 @@ extern "C" NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING Reg
     if (!NT_SUCCESS(status)) {
         IoDeleteDevice(devobj);
         return status;
+    }
+
+    if (!AllocateMemories()) {
+        IoDeleteSymbolicLink(&lnkname);
+        IoDeleteDevice(DriverObject->DeviceObject);
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
 
     return STATUS_SUCCESS;

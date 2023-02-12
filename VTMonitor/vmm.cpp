@@ -6,13 +6,8 @@
 #include <intrin.h>
 #include "vmx.h"
 #include "msr.h"
+#include "mem.h"
 #include "vtm_debug.h"
-
-#define POOLTAG 'VTMN'
-
-#define ALIGNMENT_PAGE_SIZE 4096
-#define VMCS_SIZE           4096
-#define VMXON_SIZE          4096
 
 extern "C" void VMXSetVMXE(void);
 extern "C" VOID VMXRestoreState();
@@ -33,136 +28,17 @@ extern "C" ULONG64 asm_get_gdt_base(void);
 extern "C" ULONG64 asm_get_idt_base(void);
 extern "C" ULONG64 asm_get_dr7(void);
 
-typedef struct _VirtualMachineState
-{
-    UINT64 VMXON_REGION;                        // VMXON region
-    UINT64 VMCS_REGION;                         // VMCS region
-    UINT64 EPTP;                                // Extended-Page-Table Pointer
-    UINT64 MSRBitMap;                           // MSRBitMap Virtual Address
-    UINT64 MSRBitMapPhysical;                   // MSRBitMap Physical Address
-    UINT64 MSREntryLoad;
-    UINT64 MSREntryLoadPhysical;
-    UINT64 MSRExitLoad;
-    UINT64 MSRExitLoadPhysical;
-} VirtualMachineState, * PVirtualMachineState;
-
-BOOLEAN AllocateMSRBitmap(PVirtualMachineState vmState)
-{
-    PVOID MSRBitMap = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, POOLTAG);
-    if (MSRBitMap == NULL) {
-        DebugVTMON("%s Failed Memory Allocation", __FUNCTION__);
-        return FALSE;
-    }
-
-    RtlZeroMemory(MSRBitMap, PAGE_SIZE);
-    vmState->MSRBitMap = reinterpret_cast<UINT64>(MSRBitMap);
-    vmState->MSRBitMapPhysical = MmGetPhysicalAddress(MSRBitMap).QuadPart;
-
-    return TRUE;
-}
-
-BOOLEAN AllocateMSRControlInfo(PVirtualMachineState vmState)
-{
-    PVOID MSREntryLoad = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, POOLTAG);
-    if (MSREntryLoad == NULL) {
-        DebugVTMON("%s Failed Memory Allocation", __FUNCTION__);
-        return FALSE;
-    }
-    PVOID MSRExitLoad = ExAllocatePoolWithTag(NonPagedPool, PAGE_SIZE, POOLTAG);
-    if (MSRExitLoad == NULL) {
-        DebugVTMON("%s Failed Memory Allocation", __FUNCTION__);
-        return FALSE;
-    }
-
-    RtlZeroMemory(MSREntryLoad, PAGE_SIZE);
-    RtlZeroMemory(MSRExitLoad, PAGE_SIZE);
-    vmState->MSREntryLoad = reinterpret_cast<UINT64>(MSREntryLoad);
-    vmState->MSRExitLoad = reinterpret_cast<UINT64>(MSRExitLoad);
-    vmState->MSREntryLoadPhysical = MmGetPhysicalAddress(MSREntryLoad).QuadPart;
-    vmState->MSRExitLoadPhysical = MmGetPhysicalAddress(MSRExitLoad).QuadPart;
-
-    return TRUE;
-}
-
-#ifndef MAXULONG64
-#define MAXULONG64 (ULONG64)(-1)
-#endif
-
-typedef union _IA32_VMX_BASIC_MSR
-{
-    ULONG64 All;
-    struct
-    {
-        ULONG32 RevisionIdentifier : 31;   // [0-30]
-        ULONG32 Reserved1 : 1;             // [31]
-        ULONG32 RegionSize : 12;           // [32-43]
-        ULONG32 RegionClear : 1;           // [44]
-        ULONG32 Reserved2 : 3;             // [45-47]
-        ULONG32 SupportedIA64 : 1;         // [48]
-        ULONG32 SupportedDualMoniter : 1;  // [49]
-        ULONG32 MemoryType : 4;            // [50-53]
-        ULONG32 VmExitReport : 1;          // [54]
-        ULONG32 VmxCapabilityHint : 1;     // [55]
-        ULONG32 Reserved3 : 8;             // [56-63]
-    } Fields;
-} IA32_VMX_BASIC_MSR, *PIA32_VMX_BASIC_MSR;
-
-// allocate memory for VMXON or VMCS region
-// return allocated Physical Buffer
-UINT64 InitVTXRegion(size_t allocsize, size_t alignsize)
-{
-    allocsize *= 2; // for alignsize
-    
-    PHYSICAL_ADDRESS PhysicalMax = { };
-    PhysicalMax.QuadPart = MAXULONG64;
-    auto buffer = static_cast<char*>(MmAllocateContiguousMemory(allocsize + alignsize, PhysicalMax));
-    if (!buffer) {
-        DebugVTMON("[%s] Failed MmAllocateContiguousMemory", __FUNCTION__);
-        return 0;
-    }
-
-    RtlSecureZeroMemory(buffer, allocsize + alignsize);
-
-    UINT64 phybuf =  MmGetPhysicalAddress(buffer).QuadPart;
-    UINT64 aligned_physical_buffer  =    static_cast<UINT64>((phybuf + alignsize - 1)) & ~(alignsize - 1);
-    UINT64 aligned_virtual_buffer   =    reinterpret_cast<UINT64>((buffer + alignsize - 1)) & ~(alignsize - 1);
-
-    IA32_VMX_BASIC_MSR basic = {};
-    basic.All = __readmsr(MSR_IA32_VMX_BASIC);
-
-    *reinterpret_cast<UINT64 *>(aligned_virtual_buffer) = basic.Fields.RevisionIdentifier;
-
-    return aligned_physical_buffer;
-}
 
 BOOLEAN ExecVMXON(IN PVirtualMachineState vmState)
 {
-    UINT64 vmxon_region = InitVTXRegion(VMXON_SIZE, ALIGNMENT_PAGE_SIZE);
-    if (!vmxon_region) {
-        DebugVTMON("[%s] Failed InitVTXRegion", __FUNCTION__);
-        return FALSE;
-    }
+    if (!vmState || !vmState->VMXON_REGION)
+        return false;
 
-    int status = __vmx_on(&vmxon_region);
+    int status = __vmx_on(&vmState->VMXON_REGION);
     if (status) {
         DebugVTMON("[%s] Failed __vmx_on Status:%x", __FUNCTION__, status);
         return FALSE;
     }
-
-    vmState->VMXON_REGION = vmxon_region;
-
-    return TRUE;
-}
-
-BOOLEAN AllocateVMCS(IN PVirtualMachineState vmState)
-{
-    UINT64 vmcs_region = InitVTXRegion(VMCS_SIZE, ALIGNMENT_PAGE_SIZE);
-    if (!vmcs_region) {
-        DebugVTMON("[%s] Failed InitVTXRegion", __FUNCTION__);
-        return FALSE;
-    }
-
-    vmState->VMCS_REGION = vmcs_region;
 
     return TRUE;
 }
@@ -514,21 +390,15 @@ bool Handler(vtmif *vmdata)
 
 void StartVirtualization(vtmif *vmdata)
 {
-    PVirtualMachineState vtx_mem = nullptr;
-    vtx_mem = (PVirtualMachineState)ExAllocatePoolWithTag(NonPagedPool, sizeof(VirtualMachineState), POOLTAG);
+    auto vtx_mem = GetVMState();
     if (!vtx_mem)
         return;
 
-    RtlZeroMemory(vtx_mem, sizeof(vtx_mem));
-
     KIRQL cur_irql = KeGetCurrentIrql();
-    if (!AllocateVMCS(vtx_mem)      ||
-        !AllocateMSRBitmap(vtx_mem) ||
-        !AllocateMSRControlInfo(vtx_mem))
-        goto RELEASE_MEM;
-
     if (cur_irql < DISPATCH_LEVEL)
         KeRaiseIrql(DISPATCH_LEVEL, &cur_irql);
+
+    KeMemoryBarrier();
 
     VMXSetVMXE();
 
@@ -568,23 +438,6 @@ void StartVirtualization(vtmif *vmdata)
 
     if (cur_irql < DISPATCH_LEVEL)
         KeLowerIrql(cur_irql);
-
-RELEASE_MEM:
-
-    if (vtx_mem->MSRBitMap)
-        ExFreePool(reinterpret_cast<PVOID>(vtx_mem->MSRBitMap));
-    if (vtx_mem->MSREntryLoad)
-        ExFreePool(reinterpret_cast<PVOID>(vtx_mem->MSREntryLoad));
-    if (vtx_mem->MSRExitLoad)
-        ExFreePool(reinterpret_cast<PVOID>(vtx_mem->MSRExitLoad));
-
-    PHYSICAL_ADDRESS PhysicalAddr;
-    PhysicalAddr.QuadPart = vtx_mem->VMCS_REGION;
-    if (PhysicalAddr.QuadPart)
-        MmFreeContiguousMemory(MmGetVirtualForPhysical(PhysicalAddr));
-    PhysicalAddr.QuadPart = vtx_mem->VMXON_REGION;
-    if (PhysicalAddr.QuadPart)
-        MmFreeContiguousMemory(MmGetVirtualForPhysical(PhysicalAddr));
 
     return;
 }
