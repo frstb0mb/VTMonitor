@@ -82,10 +82,12 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="PE.cpp" />
     <ClCompile Include="VTMonitorClient.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\common\common.h" />
+    <ClInclude Include="PE.h" />
   </ItemGroup>
   <ItemGroup>
     <MASM Include="syscall.asm">
