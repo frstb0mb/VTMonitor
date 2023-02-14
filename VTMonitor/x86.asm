@@ -213,4 +213,9 @@ asm_get_dr7 PROC
     ret
 asm_get_dr7 ENDP
 
+asm_get_rsp PROC
+    mov rax, rsp
+    ret
+asm_get_rsp ENDP
+
 END

@@ -4,6 +4,7 @@
 #include "vtm_debug.h"
 #include "vmx.h"
 #include "msr.h"
+#include "ept.h"
 
 #define POOLTAG 'VTMN'
 #define ALIGNMENT_PAGE_SIZE 4096
@@ -152,6 +153,7 @@ void ReleaseMemories()
         ExFreePool(reinterpret_cast<PVOID>(vtx_mem->MSRExitLoad));
     if (vtx_mem->VirtAPIC)
         ExFreePool(reinterpret_cast<PVOID>(vtx_mem->VirtAPIC));
+    EPTRelease();
 
     PHYSICAL_ADDRESS PhysicalAddr;
     PhysicalAddr.QuadPart = vtx_mem->VMCS_REGION;
@@ -179,7 +181,8 @@ bool AllocateMemories()
     if (!AllocateVMXMem(vtx_mem)      ||
         !AllocateMSRBitmap(vtx_mem) ||
         !AllocateMSRControlInfo(vtx_mem) ||
-        !AllocateVirtAPIC(vtx_mem)) {
+        !AllocateVirtAPIC(vtx_mem) ||
+        !EPTInit()) {
             ReleaseMemories();
             vtx_mem = nullptr;
             return false;

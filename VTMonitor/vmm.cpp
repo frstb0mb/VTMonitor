@@ -8,6 +8,7 @@
 #include "msr.h"
 #include "mem.h"
 #include "vtm_debug.h"
+#include "ept.h"
 
 extern "C" void VMXSetVMXE(void);
 extern "C" VOID VMXRestoreState();
@@ -289,7 +290,7 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
         __vmx_vmwrite(VM_EXIT_MSR_STORE_COUNT, 0);
 
         __vmx_vmwrite(CPU_BASED_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_ACTIVATE_MSR_BITMAP | CPU_BASED_HLT_EXITING | CPU_BASED_ACTIVATE_SECONDARY_CONTROLS, MSR_IA32_VMX_PROCBASED_CTLS));
-        __vmx_vmwrite(SECONDARY_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_CTL2_RDTSCP | CPU_BASED_CTL2_ENABLE_INVPCID | CPU_BASED_CTL2_ENABLE_XSAVE_XRSTORS, MSR_IA32_VMX_PROCBASED_CTLS2));
+        __vmx_vmwrite(SECONDARY_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_CTL2_RDTSCP | CPU_BASED_CTL2_ENABLE_EPT | CPU_BASED_CTL2_ENABLE_INVPCID | CPU_BASED_CTL2_ENABLE_XSAVE_XRSTORS, MSR_IA32_VMX_PROCBASED_CTLS2));
 
         __vmx_vmwrite(PIN_BASED_VM_EXEC_CONTROL, AdjustControls(PIN_BASED_VM_EXECUTION_CONTROLS_EXTERNAL_INTERRUPT | PIN_BASED_VM_EXECUTION_CONTROLS_NMI_EXITING, MSR_IA32_VMX_PINBASED_CTLS));
         __vmx_vmwrite(VM_EXIT_CONTROLS, AdjustControls(VM_EXIT_IA32E_MODE | VM_EXIT_LOAD_HOST_EFER, MSR_IA32_VMX_EXIT_CTLS));
@@ -308,6 +309,8 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
 
         // Host application handles all exceptions.(this is simple way)
         __vmx_vmwrite(EXCEPTION_BITMAP, ~static_cast<UINT64>(0));
+
+        __vmx_vmwrite(EPT_POINTER, GetEPTState()->EptPointer.Flags);
     }
     return TRUE;
 }
@@ -402,7 +405,7 @@ void StartVirtualization(vtmif *vmdata)
 
     VMXSetVMXE();
 
-    if (ExecVMXON(vtx_mem)) {
+    if (ExecVMXON(vtx_mem) && SwapStack()) {
         if (InitVMCS(vtx_mem)) {
             bool resume = false;
             do {
