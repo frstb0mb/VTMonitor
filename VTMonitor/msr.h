@@ -1,3 +1,25 @@
+#define MSR_IA32_MTRR_CAPABILITIES          0x0FE
+#define MSR_IA32_MTRR_PHYSBASE0             0x200
+#define MSR_IA32_MTRR_PHYSBASE1             0x202
+#define MSR_IA32_MTRR_PHYSBASE2             0x204
+#define MSR_IA32_MTRR_PHYSBASE3             0x206
+#define MSR_IA32_MTRR_PHYSBASE4             0x208
+#define MSR_IA32_MTRR_PHYSBASE5             0x20A
+#define MSR_IA32_MTRR_PHYSBASE6             0x20C
+#define MSR_IA32_MTRR_PHYSBASE7             0x20E
+#define MSR_IA32_MTRR_PHYSBASE8             0x210
+#define MSR_IA32_MTRR_PHYSBASE9             0x212
+#define MSR_IA32_MTRR_PHYSMASK0             0x201
+#define MSR_IA32_MTRR_PHYSMASK1             0x203
+#define MSR_IA32_MTRR_PHYSMASK2             0x205
+#define MSR_IA32_MTRR_PHYSMASK3             0x207
+#define MSR_IA32_MTRR_PHYSMASK4             0x209
+#define MSR_IA32_MTRR_PHYSMASK5             0x20B
+#define MSR_IA32_MTRR_PHYSMASK6             0x20D
+#define MSR_IA32_MTRR_PHYSMASK7             0x20F
+#define MSR_IA32_MTRR_PHYSMASK8             0x211
+#define MSR_IA32_MTRR_PHYSMASK9             0x213
+
 #define MSR_APIC_BASE                       0x01B
 #define MSR_IA32_FEATURE_CONTROL            0x03A
 

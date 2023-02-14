@@ -68,11 +68,13 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="driver.cpp" />
+    <ClCompile Include="ept.cpp" />
     <ClCompile Include="mem.cpp" />
     <ClCompile Include="vmm.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\common\common.h" />
+    <ClInclude Include="ept.h" />
     <ClInclude Include="mem.h" />
     <ClInclude Include="msr.h" />
     <ClInclude Include="vmm.h" />
