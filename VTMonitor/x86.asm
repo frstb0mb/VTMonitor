@@ -218,4 +218,9 @@ asm_get_rsp PROC
     ret
 asm_get_rsp ENDP
 
+asm_set_cr2 PROC
+    mov cr2, rcx
+    ret
+asm_set_cr2 ENDP
+
 END

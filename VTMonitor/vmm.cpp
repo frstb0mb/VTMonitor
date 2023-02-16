@@ -28,6 +28,7 @@ extern "C" USHORT asm_get_gdt_limit(VOID);
 extern "C" ULONG64 asm_get_gdt_base(void);
 extern "C" ULONG64 asm_get_idt_base(void);
 extern "C" ULONG64 asm_get_dr7(void);
+extern "C" void asm_set_cr2(UINT64);
 
 
 BOOLEAN ExecVMXON(IN PVirtualMachineState vmState)
@@ -175,6 +176,35 @@ ULONG AdjustControls(IN ULONG ctl, IN ULONG msr)
     return ctl;
 }
 
+BOOLEAN InitVMCS(PVirtualMachineState vtx_mem)
+{
+    asm_cli();
+    if (!ClearVMCS(vtx_mem))
+        return FALSE;
+    
+    if (!LoadVMCS(vtx_mem))
+        return FALSE;
+
+    return TRUE;
+}
+
+
+union INTERRUPT_INFO {
+    struct {
+        UINT32 Vector : 8;
+        /* 0=Ext Int, 1=Rsvd, 2=NMI, 3=Exception, 4=Soft INT,
+        * 5=Priv Soft Trap, 6=Unpriv Soft Trap, 7=Other */
+        UINT32 InterruptType : 3;
+        UINT32 DeliverCode : 1;  /* 0=Do not deliver, 1=Deliver */
+        UINT32 Reserved : 19;
+        UINT32 Valid : 1;         /* 0=Not valid, 1=Valid. Must be checked first */
+    } field;
+    UINT32 Flags;
+};
+INTERRUPT_INFO Inject = {};
+UINT64 exit_len = 0;
+UINT64 last_gs = 0;
+
 BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool resume)
 {
     // setting host segments
@@ -205,7 +235,7 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
    __vmx_vmwrite(GUEST_FS_BASE, __readmsr(MSR_FS_BASE));
 
     UINT64 msr_control_count = 0;
-    if (vmdata->context.SegCs & 0x1) {
+    if ((last_gs>>63) != 1 || (vmdata->context.SegCs & 0x1)) {
         // guest is in usermode
         auto usergs = __readmsr(MSR_SHADOW_GS_BASE);
         auto kernelgs = __readmsr(MSR_GS_BASE);
@@ -289,7 +319,7 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
 
         __vmx_vmwrite(VM_EXIT_MSR_STORE_COUNT, 0);
 
-        __vmx_vmwrite(CPU_BASED_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_ACTIVATE_MSR_BITMAP | CPU_BASED_HLT_EXITING | CPU_BASED_ACTIVATE_SECONDARY_CONTROLS, MSR_IA32_VMX_PROCBASED_CTLS));
+        __vmx_vmwrite(CPU_BASED_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_TPR_SHADOW | CPU_BASED_ACTIVATE_MSR_BITMAP | CPU_BASED_HLT_EXITING | CPU_BASED_ACTIVATE_SECONDARY_CONTROLS, MSR_IA32_VMX_PROCBASED_CTLS));
         __vmx_vmwrite(SECONDARY_VM_EXEC_CONTROL, AdjustControls(CPU_BASED_CTL2_RDTSCP | CPU_BASED_CTL2_ENABLE_EPT | CPU_BASED_CTL2_ENABLE_INVPCID | CPU_BASED_CTL2_ENABLE_XSAVE_XRSTORS, MSR_IA32_VMX_PROCBASED_CTLS2));
 
         __vmx_vmwrite(PIN_BASED_VM_EXEC_CONTROL, AdjustControls(PIN_BASED_VM_EXECUTION_CONTROLS_EXTERNAL_INTERRUPT | PIN_BASED_VM_EXECUTION_CONTROLS_NMI_EXITING, MSR_IA32_VMX_PINBASED_CTLS));
@@ -307,24 +337,71 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
         __vmx_vmwrite(CR0_READ_SHADOW, 0);
         __vmx_vmwrite(CR4_READ_SHADOW, 0);
 
-        // Host application handles all exceptions.(this is simple way)
-        __vmx_vmwrite(EXCEPTION_BITMAP, ~static_cast<UINT64>(0));
-
         __vmx_vmwrite(EPT_POINTER, GetEPTState()->EptPointer.Flags);
     }
+
+    if (vmdata->valid_inject || !(vmdata->context.SegCs & 0x1)) {
+        // disable APIC in guest kernel
+        // Using CLI may cause BSOD(At least, IF is checked by PF-handler)
+        // MSR bitmap cannnot be used
+        UINT64 sivr = __readmsr(MSR_IA32_X2APIC_SIVR);
+        __writemsr(MSR_IA32_X2APIC_SIVR, sivr & ~static_cast<UINT64>(1<<8));
+
+        __vmx_vmwrite(EXCEPTION_BITMAP, 1 << EXCEPTION_BP);
+    }
+    else {
+        // Host application handles all exceptions.(this is simple way)
+        __vmx_vmwrite(EXCEPTION_BITMAP, ~static_cast<UINT64>(0));
+    }
+
+    if (vmdata->valid_inject) {
+        Inject.field.Valid = TRUE;
+        __vmx_vmwrite(VM_ENTRY_INTR_INFO_FIELD, Inject.Flags);
+        if (Inject.field.DeliverCode)
+            __vmx_vmwrite(VM_ENTRY_EXCEPTION_ERROR_CODE, vmdata->error);
+        if (exit_len)
+            __vmx_vmwrite(VM_ENTRY_INSTRUCTION_LEN, exit_len);
+        if (vmdata->vec == EXCEPTION_PF)
+            asm_set_cr2(vmdata->except_addr);
+
+        vmdata->valid_inject = FALSE;
+    }
+
     return TRUE;
 }
 
-BOOLEAN InitVMCS(PVirtualMachineState vtx_mem)
+VOID QuerExceptionInfo(UINT64 inttype)
 {
-    asm_cli();
-    if (!ClearVMCS(vtx_mem))
-        return FALSE;
-    
-    if (!LoadVMCS(vtx_mem))
-        return FALSE;
+    Inject.field.Valid = TRUE;
+    Inject.field.InterruptType = 3;
+    Inject.field.Vector = static_cast<UINT32>(inttype);
+    Inject.field.DeliverCode = FALSE;
 
-    return TRUE;
+    exit_len = 0;
+
+    switch (inttype) {
+        case EXCEPTION_DB :
+            Inject.field.InterruptType = 5;
+            __vmx_vmread(VM_EXIT_INSTRUCTION_LEN, &exit_len);
+            break;
+        case EXCEPTION_BP :
+        case EXCEPTION_OF :
+            Inject.field.InterruptType = 6;
+            __vmx_vmread(VM_EXIT_INSTRUCTION_LEN, &exit_len);
+            break;
+        case EXCEPTION_DF :
+        case EXCEPTION_TS :
+        case EXCEPTION_NP :
+        case EXCEPTION_SS :
+        case EXCEPTION_GP :
+        case EXCEPTION_PF :
+        case EXCEPTION_AC :
+        case EXCEPTION_SX :
+            Inject.field.DeliverCode = TRUE;
+            break;
+        default :
+            break;
+    }
 }
 
 bool Handler(vtmif *vmdata)
@@ -356,14 +433,25 @@ bool Handler(vtmif *vmdata)
                     UINT64 except_addr;
                     __vmx_vmread(EXIT_QUALIFICATION, &except_addr);
                     vmdata->except_addr = except_addr;
-                    break;
 
                 default:
+                    vmdata->valid_inject = TRUE;
+                    QuerExceptionInfo(vmdata->vec);
                     break;
             }
             UINT64 intr_err = 0;
             __vmx_vmread(VM_EXIT_INTR_ERROR_CODE, &intr_err);
             vmdata->error = intr_err;
+            break;
+        }
+        case 1:
+        {
+            if (!(vmdata->context.SegCs & 0x1)) {
+                asm_sli();
+                //__halt();
+                asm_cli();
+                is_continue = true;
+            }
             break;
         }
         case 0xa:
@@ -375,6 +463,27 @@ bool Handler(vtmif *vmdata)
             vmdata->context.Rcx = cpu_info[2];
             vmdata->context.Rdx = cpu_info[3];
             __vmx_vmread(VM_EXIT_INSTRUCTION_LEN, &inst_len);
+            is_continue = true;
+            break;
+        }
+        case 0x1c:
+        {
+            UINT64 info = 0;
+            vmx_exit_qualification_ctr detail;
+            __vmx_vmread(EXIT_QUALIFICATION, &info);
+            detail.raw = info;
+            if (detail.field.creg == 3) {
+                UINT64 *regs = &(vmdata->context.Rax);
+                if (detail.field.type == 0)
+                {
+                    // collapse!
+                }
+                else if (detail.field.type == 1)
+                {
+                    regs[detail.field.gpr] = __readcr3();
+                }
+                __vmx_vmread(VM_EXIT_INSTRUCTION_LEN, &inst_len);
+            }
             is_continue = true;
             break;
         }
@@ -430,6 +539,14 @@ void StartVirtualization(vtmif *vmdata)
                 vmdata->context.SegFs = static_cast<USHORT>(guest_selector);
                 __vmx_vmread(GUEST_GS_SELECTOR, &guest_selector);
                 vmdata->context.SegGs = static_cast<USHORT>(guest_selector);
+
+                __vmx_vmread(GUEST_GS_BASE, &last_gs);
+
+                // Enable APIC
+                if (vmdata->context.SegCs & 0x1) {
+                    UINT64 sivr = __readmsr(MSR_IA32_X2APIC_SIVR);
+                    __writemsr(MSR_IA32_X2APIC_SIVR, sivr | static_cast<UINT64>(1<<8));
+                }
             } while(Handler(vmdata));
 
             __vmx_vmclear(&vtx_mem->VMCS_REGION);

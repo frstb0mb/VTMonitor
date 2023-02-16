@@ -186,10 +186,13 @@ std::unique_ptr<BYTE[]> LoadPE(LPCWSTR path, DWORD &entry, PRUNTIME_FUNCTION &fu
     }
 
     // Load Exception Info
-    functables = reinterpret_cast<PRUNTIME_FUNCTION>(ImageDirectoryEntryToData(loadinfo.getdos(), FALSE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &importsize));
+    functables = reinterpret_cast<PRUNTIME_FUNCTION>(ImageDirectoryEntryToData(reinterpret_cast<PVOID>(dest), TRUE, IMAGE_DIRECTORY_ENTRY_EXCEPTION, &importsize));
     if (functables) {
         if (!RtlAddFunctionTable(functables, importsize / sizeof(RUNTIME_FUNCTION), dest)) {
             wprintf(L"[ERROR] RtlAddFunctionTable %x\n", GetLastError());
+        }
+        else {
+            wprintf(L"[INFO] Function table is %p\n", functables);
         }
     }
     else {

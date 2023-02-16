@@ -16,6 +16,7 @@ typedef struct _vtmif {
     UINT64 error;       // Exception error code
     UINT64 vec;         // Exception vector
     UINT64 except_addr; // For #PF
+    UINT64 valid_inject;
 
     CONTEXT context;
 } vtmif;
