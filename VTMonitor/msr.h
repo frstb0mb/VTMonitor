@@ -54,4 +54,4 @@
 #define MSR_GS_BASE                         0xC0000101
 #define MSR_SHADOW_GS_BASE                  0xC0000102
 
-//#define MSR_IA32_KERNEL_GS_BASE             0xC0000102
+#define MSR_IA32_X2APIC_SIVR                0x80F
