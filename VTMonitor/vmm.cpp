@@ -341,7 +341,7 @@ BOOLEAN WriteVMCSFields(IN PVirtualMachineState vmState, vtmif *vmdata, bool res
     }
 
     if (vmdata->valid_inject || !(vmdata->context.SegCs & 0x1)) {
-        // disable APIC in guest kernel
+        // disable APIC in guest kernel(x2APIC is assumed)
         // Using CLI may cause BSOD(At least, IF is checked by PF-handler)
         // MSR bitmap cannnot be used
         UINT64 sivr = __readmsr(MSR_IA32_X2APIC_SIVR);

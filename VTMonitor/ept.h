@@ -1,3 +1,6 @@
+// forked from 
+// https://github.com/SinaKarvandi/Hypervisor-From-Scratch/blob/master/Part%208%20-%20How%20To%20Do%20Magic%20With%20Hypervisor!/Hypervisor%20From%20Scratch/MyHypervisorDriver/Ept.h
+
 #pragma once
 
 #include <ntddk.h>
@@ -969,5 +972,4 @@ typedef union _VMX_EXIT_QUALIFICATION_EPT_VIOLATION
 bool EPTInit();
 void EPTRelease();
 bool SwapStack();
-void RevertGuestRsp0();
 EPT_STATE* GetEPTState();
