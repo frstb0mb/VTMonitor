@@ -6,7 +6,9 @@ You can write syscall handlers to modify behaviour or monitor args.
 Perhaps multi-processing and multi-threading can be supported if appropriate handlers are written.  
 At least, NtCreateUserProcess and NtCreateThreadEx must be handled.  
 
-Please only use this for simple programs. (VEH, SEH and others are not supported)
+Please only use this for simple programs. ~~(VEH, SEH and others are not supported)~~  
+VEH and SEH are supported but there is a possibility that Windows will hang in order to run kernel code in guest mode.  
+If you dont need to use exception handling, please check "Base-Impl" tag.
 
 
 
